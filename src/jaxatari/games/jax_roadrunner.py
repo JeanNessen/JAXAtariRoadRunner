@@ -1372,7 +1372,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "road", "type": "procedural", "data": road_sprite},
             {"name": "wall_bottom", "type": "procedural", "data": wall_sprite_bottom},
             {"name": "score_digits", "type": "digits", "pattern": "score_{}.npy"},
-            {"name": "seed", "type": "procedural", "data": self._create_seed_sprite()},
+            {"name": "seed", "type": "single", "file": "birdseed.npy"},
             {"name": "truck", "type": "procedural", "data": truck_sprite},
         ]
 
