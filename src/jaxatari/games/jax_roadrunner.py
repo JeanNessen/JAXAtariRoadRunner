@@ -1447,7 +1447,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "score_digits", "type": "digits", "pattern": "score_{}.npy"},
             {"name": "seed", "type": "single", "file": "birdseed.npy"},
             {"name": "truck", "type": "single", "file": "truck.npy"},
-            {"name": "life", "type": "procedural", "data": life_sprite},
+            {"name": "life", "type": "single", "file": "lives.npy"},
         ]
 
         return asset_config
