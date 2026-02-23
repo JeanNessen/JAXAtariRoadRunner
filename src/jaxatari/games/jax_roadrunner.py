@@ -88,6 +88,7 @@ class RoadRunnerConstants(NamedTuple):
     LANDMINE_SPAWN_MIN_INTERVAL: int = 120
     LANDMINE_SPAWN_MAX_INTERVAL: int = 240
     DEATH_ANIMATION_DURATION: int = 60  # 1 second at 60 FPS
+    RAVINE_FALL_SPEED: int = 2  # Pixels per frame player falls into ravine
     # Enemy speed variation - speeds as offsets from PLAYER_MOVE_SPEED
     ENEMY_SLOW_SPEED_OFFSET: int = -1        # Speed = PLAYER_MOVE_SPEED - 1 = 2
     ENEMY_FAST_SPEED_OFFSET: int = 1         # Speed = PLAYER_MOVE_SPEED + 1 = 4
@@ -459,6 +460,7 @@ class RoadRunnerState(NamedTuple):
     next_landmine_spawn_step: chex.Array
     death_timer: chex.Array
     instant_death: chex.Array # Boolean, if true, skip death animation/delay
+    is_falling_into_ravine: chex.Array  # Boolean, if true, player is falling into ravine
     enemy_speed_phase_start: chex.Array  # Scroll step when current speed phase cycle began
     enemy_flattened_timer: chex.Array  # Timer for enemy being run over
 
@@ -1274,7 +1276,11 @@ class JaxRoadRunner(
 
             return jax.lax.cond(
                 collision,
-                lambda s: s._replace(instant_death=True),
+                lambda s: s._replace(
+                    death_timer=jnp.array(self.consts.DEATH_ANIMATION_DURATION, dtype=jnp.int32),
+                    is_falling_into_ravine=jnp.array(True, dtype=jnp.bool_),
+                    instant_death=jnp.array(False, dtype=jnp.bool_),
+                ),
                 lambda s: s,
                 st
             )
@@ -1450,6 +1456,7 @@ class JaxRoadRunner(
             landmine_y=jnp.array(-1, dtype=jnp.int32),
             next_landmine_spawn_step=jnp.array(0, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
+            is_falling_into_ravine=jnp.array(False, dtype=jnp.bool_),
             enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
             enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
         )
@@ -1503,6 +1510,13 @@ class JaxRoadRunner(
 
         def _death_timer_branch(data):
              st, _ = data
+             # If falling into ravine, move player downward each frame
+             st = jax.lax.cond(
+                 st.is_falling_into_ravine,
+                 lambda s: s._replace(player_y=s.player_y + self.consts.RAVINE_FALL_SPEED),
+                 lambda s: s,
+                 st
+             )
              # Decrement death timer
              st = st._replace(death_timer=jnp.maximum(st.death_timer - 1, 0))
 
@@ -1591,6 +1605,7 @@ class JaxRoadRunner(
             landmine_y=jnp.array(-1, dtype=jnp.int32),
             next_landmine_spawn_step=jnp.array(0, dtype=jnp.int32),
             death_timer=jnp.array(0, dtype=jnp.int32),
+            is_falling_into_ravine=jnp.array(False, dtype=jnp.bool_),
             enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
             enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
         )
@@ -1696,6 +1711,7 @@ class JaxRoadRunner(
             instant_death=jnp.array(False, dtype=jnp.bool_),
             enemy_speed_phase_start=jnp.array(0, dtype=jnp.int32),
             enemy_flattened_timer=jnp.array(0, dtype=jnp.int32),
+            is_falling_into_ravine=jnp.array(False, dtype=jnp.bool_),
         )
 
     def _get_level_index(self, state: RoadRunnerState) -> jnp.ndarray:
@@ -2338,8 +2354,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
             return self.jr.render_at(c, state.player_x, state.player_y, jump_mask)
 
         # Switch between burnt, jumping, Normal
-        # Priority: Burnt (Death) > Jump > Normal
-        
+        # Priority: Burnt (Death, non-ravine) > Fall (ravine death) > Jump > Normal
+
         def _render_alive_player(c):
             return jax.lax.cond(
                 state.is_jumping,
@@ -2349,7 +2365,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
             )
 
         canvas = jax.lax.cond(
-            state.death_timer > 0,
+            (state.death_timer > 0) & jnp.logical_not(state.is_falling_into_ravine),
             _render_burnt_player,
             _render_alive_player,
             canvas,
