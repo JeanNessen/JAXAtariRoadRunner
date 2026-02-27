@@ -58,7 +58,7 @@ def make_env_with_offramp(scroll_start=100, scroll_end=500, bridges=()):
 
 def active_offramp_state(env, scroll_counter=200):
     """Return a reset state with offramp active (scroll counter past scroll_start)."""
-    key = jax.random.PRNGKey(42)
+    key = jax.random.PRNGKey(0)
     _, state = env.reset(key)
     state = state._replace(
         scrolling_step_counter=jnp.array(scroll_counter, dtype=jnp.int32),
@@ -134,7 +134,7 @@ def test_no_teleport_when_descending_via_bridge():
     state = state._replace(
         player_x=jnp.array(player_x, dtype=jnp.int32),
         player_y=jnp.array(player_y_in_gap, dtype=jnp.int32),
-        player_on_offramp=jnp.array(False),  # just transitioned off
+        player_on_offramp=jnp.array(True),   # mid-descent from offramp (previous step value)
     )
 
     # Verify: player is at a bridge (in_transition should be True at this step)
@@ -162,9 +162,9 @@ def test_no_teleport_when_descending_via_bridge():
         road_top_v,
         road_bottom_v,
     )
-    # The player must stay at or below player_y_in_gap — NOT snapped back to off_max_y
+    # The player must snap DOWN to the main road (y >= player_y_in_gap=74), NOT back up
     assert int(checked_y) >= player_y_in_gap, (
-        f"Player was snapped from y={player_y_in_gap} up to y={int(checked_y)} "
+        f"Player was snapped from y={player_y_in_gap} UP to y={int(checked_y)} "
         f"(off_max_y={off_max_y}) — teleportation bug!"
     )
 
@@ -244,8 +244,8 @@ def test_player_in_gap_no_transition_snaps_to_main_road():
     state = state._replace(
         player_y=jnp.array(gap_y, dtype=jnp.int32),
         player_on_offramp=jnp.array(False),
-        # player_x far from any split/merge/bridge → no transition
-        player_x=jnp.array(consts.SIDE_MARGIN + 4, dtype=jnp.int32),
+        # player_x mid-screen, away from fixed split [8,32] and merge [128,152] zones
+        player_x=jnp.array(60, dtype=jnp.int32),
     )
 
     road_top_v, road_bottom_v, _ = env._get_road_bounds(state)
@@ -254,7 +254,7 @@ def test_player_in_gap_no_transition_snaps_to_main_road():
     for proposed_y in [gap_y - 2, gap_y, gap_y + 1, main_min_y - 1]:
         checked_x, checked_y = env._check_player_bounds(
             state,
-            jnp.array(consts.SIDE_MARGIN + 4, dtype=jnp.int32),
+            jnp.array(60, dtype=jnp.int32),
             jnp.array(proposed_y, dtype=jnp.int32),
             road_top_v,
             road_bottom_v,
@@ -421,9 +421,10 @@ def test_merge_zone_does_not_allow_main_to_offramp():
     while still in the merge zone must NOT snap them back to the offramp
     (the phantom-extension bug).
 
-    The merge is the END of the offramp road.  There is nothing above it to the
-    right.  A main-road player at the merge must be kept on the main road even
-    if their proposed y enters the gap zone.
+    The merge is the END of the offramp road.  A main-road player at the merge
+    must be kept on the main road even if their proposed y enters the gap zone.
+
+    With fixed sprites, the merge zone is always at [W-MARGIN-RAMP_W, W-MARGIN].
     """
     env = make_env_with_offramp(scroll_start=100, scroll_end=300)
     consts = env.consts
@@ -432,38 +433,37 @@ def test_merge_zone_does_not_allow_main_to_offramp():
     offramp_bottom = road_top - consts.OFFRAMP_GAP      # 102
     off_max_y = offramp_bottom - consts.PLAYER_SIZE[1]  # 70
     main_min_y = road_top - (consts.PLAYER_SIZE[1] - 5) # 83
-    SPEED = consts.PLAYER_MOVE_SPEED
     RAMP_W = consts.OFFRAMP_RAMP_WIDTH
     W = consts.WIDTH
+    MARGIN = consts.SIDE_MARGIN
 
-    # scroll_counter where merge is in the middle of the screen.
-    # New formula: merge_x = W - (counter - scroll_end) * SPEED
-    # We want merge_x ≈ 80 (mid-screen): counter = scroll_end + (W - 80) // SPEED = 300 + 26 = 326
-    scroll_counter = 326
-    merge_x = W - (scroll_counter - 300) * SPEED  # 160 - 78 = 82
+    # Fixed merge zone: [W-MARGIN-RAMP_W, W-MARGIN] = [128, 152]
+    merge_zone_left = W - MARGIN - RAMP_W    # 128
+    merge_zone_right = W - MARGIN            # 152
 
-    # Place the player squarely in the merge zone [merge_x - RAMP_W, merge_x]
-    player_x = merge_x - RAMP_W // 2 - consts.PLAYER_SIZE[0] // 2
-    player_x = max(consts.SIDE_MARGIN, min(player_x, consts.WIDTH - consts.PLAYER_SIZE[0] - consts.SIDE_MARGIN))
+    # Place the player inside the fixed merge zone
+    player_x = merge_zone_left + RAMP_W // 2 - consts.PLAYER_SIZE[0] // 2
+    player_x = max(MARGIN, min(player_x, W - consts.PLAYER_SIZE[0] - MARGIN))
+
+    scroll_counter = 150   # well within active window [100, 300+]
 
     state = active_offramp_state(env, scroll_counter=scroll_counter)
     state = state._replace(
         player_x=jnp.array(player_x, dtype=jnp.int32),
         player_y=jnp.array(main_min_y, dtype=jnp.int32),  # on main road
-        player_on_offramp=jnp.array(False),               # just came off offramp
+        player_on_offramp=jnp.array(False),               # already came off offramp
     )
 
     road_top_v, road_bottom_v, _ = env._get_road_bounds(state)
 
-    # Sanity: player overlaps the merge zone [merge_x - RAMP_W, merge_x]
-    at_merge_raw = (player_x + consts.PLAYER_SIZE[0] > merge_x - RAMP_W) & (player_x < merge_x)
+    # Sanity: player overlaps the fixed merge zone
+    at_merge_raw = (player_x + consts.PLAYER_SIZE[0] > merge_zone_left) & (player_x < merge_zone_right)
     assert at_merge_raw, (
-        f"Player (x={player_x}) should overlap merge zone [merge_x-RAMP_W={merge_x - RAMP_W}, "
-        f"merge_x={merge_x}]"
+        f"Player (x={player_x}) should overlap fixed merge zone [{merge_zone_left}, {merge_zone_right}]"
     )
 
-    # Propose y = main_min_y - SPEED (falls in gap) — MUST be rejected upward movement
-    proposed_y = main_min_y - SPEED   # e.g. 80, in the gap (70 < 80 < 83)
+    # Propose y = main_min_y - SPEED (falls in gap) — must be rejected (player on main road)
+    proposed_y = main_min_y - consts.PLAYER_MOVE_SPEED   # in gap
     assert off_max_y < proposed_y < main_min_y, (
         f"proposed_y={proposed_y} should be in the gap ({off_max_y}, {main_min_y})"
     )
@@ -485,118 +485,117 @@ def test_merge_zone_does_not_allow_main_to_offramp():
 
 
 # ---------------------------------------------------------------------------
-# Test: player on offramp is forced to main road when merge passes their position
+# Test: player on offramp stays on offramp while active (no phantom expiry)
 # ---------------------------------------------------------------------------
 
-def test_player_forced_to_main_road_when_merge_passes():
+def test_player_stays_on_offramp_while_active():
     """
-    If the player stays on the offramp past the merge point (merge_x > player_x +
-    PLAYER_W) and no bridge is active at their position, they must be snapped to the
-    main road on the next bounds check.  The offramp road no longer covers them.
+    With fixed split/merge sprites there is no 'merge has passed' concept.
+    A player on the offramp should remain on the offramp for as long as
+    offramp_active is True, regardless of their x position.
     """
     env = make_env_with_offramp(scroll_start=100, scroll_end=300)
     consts = env.consts
 
     road_top = consts.ROAD_TOP_Y
-    offramp_bottom = road_top - consts.OFFRAMP_GAP      # 102
-    off_max_y = offramp_bottom - consts.PLAYER_SIZE[1]  # 70
-    main_min_y = road_top - (consts.PLAYER_SIZE[1] - 5) # 83
-    SPEED = consts.PLAYER_MOVE_SPEED
-    PLAYER_W = consts.PLAYER_SIZE[0]
-    W = consts.WIDTH
+    offramp_bottom = road_top - consts.OFFRAMP_GAP
+    off_max_y = offramp_bottom - consts.PLAYER_SIZE[1]
 
-    # Choose a scroll counter where merge_x < player_x (merge has passed the player).
-    # player_x ≈ 70 (PLAYER_START_X).
-    # New formula: merge_x = W - (counter - scroll_end) * SPEED = W - (counter - 300)*SPEED
-    # merge_x < 70 → (counter - 300)*SPEED > W - 70 = 90 → counter > 300 + 30 = 330.
-    scroll_counter = 340   # merge_x = 160 - 40*3 = 40 < 70
-    merge_x = W - (scroll_counter - 300) * SPEED   # 40
-
-    player_x = 70   # standard player position
-    assert merge_x < player_x, (
-        f"merge_x={merge_x} should be to the left of player_x {player_x}"
-    )
+    scroll_counter = 150   # well within active window
 
     state = active_offramp_state(env, scroll_counter=scroll_counter)
     state = state._replace(
-        player_x=jnp.array(player_x, dtype=jnp.int32),
-        player_y=jnp.array(off_max_y, dtype=jnp.int32),   # on the offramp
+        player_x=jnp.array(70, dtype=jnp.int32),   # mid-screen
+        player_y=jnp.array(off_max_y, dtype=jnp.int32),
         player_on_offramp=jnp.array(True),
     )
 
     road_top_v, road_bottom_v, _ = env._get_road_bounds(state)
 
-    # Propose any y — the player should be clamped to main road range
-    for proposed_y in [off_max_y - 3, off_max_y, off_max_y + 2]:
-        checked_x, checked_y = env._check_player_bounds(
-            state,
-            jnp.array(player_x, dtype=jnp.int32),
-            jnp.array(proposed_y, dtype=jnp.int32),
-            road_top_v,
-            road_bottom_v,
-        )
-        assert int(checked_y) >= main_min_y, (
-            f"Merge has passed player (merge_x={merge_x} < player_x={player_x}); "
-            f"player should be on main road (y >= {main_min_y}), "
-            f"but bounds returned y={int(checked_y)} for proposed_y={proposed_y}"
-        )
+    checked_x, checked_y = env._check_player_bounds(
+        state,
+        jnp.array(70, dtype=jnp.int32),
+        jnp.array(off_max_y, dtype=jnp.int32),
+        road_top_v,
+        road_bottom_v,
+    )
+
+    offramp_top = offramp_bottom - consts.OFFRAMP_HEIGHT
+    off_min_y = offramp_top - (consts.PLAYER_SIZE[1] - 5)
+    assert off_min_y <= int(checked_y) <= off_max_y, (
+        f"Player on active offramp at mid-screen should stay on offramp "
+        f"[{off_min_y}, {off_max_y}], but got y={int(checked_y)}"
+    )
 
 
 # ---------------------------------------------------------------------------
-# Test: seeds are NOT spawned on the offramp after the merge enters the screen
+# Test: seeds CAN spawn on the offramp during the whole active window
 # ---------------------------------------------------------------------------
 
-def test_no_offramp_seeds_spawned_after_merge_enters_screen():
+def test_offramp_seeds_can_spawn_while_active():
     """
-    Seeds spawn at x=0 and scroll rightward.  Once the merge enters the screen
-    (merge_x > 0), seeds spawned at y=offramp_y would land outside the offramp
-    road band (which has already shrunk past x=0).  The spawn logic must therefore
-    restrict offramp spawning to merge_x <= 0.
+    With fixed sprite positions there is no 'merge has entered screen' restriction.
+    Seeds should be able to spawn on the offramp at any scroll step within the
+    active window [scroll_start, scroll_end + buffer].
     """
-    env = make_env_with_offramp(scroll_start=100, scroll_end=300)
+    # Need spawn_seeds=True for this test — build a separate env
+    base = RoadRunnerConstants()
+    level = LevelConfig(
+        level_number=1,
+        scroll_distance_to_complete=base.LEVEL_COMPLETE_SCROLL_DISTANCE,
+        road_sections=RoadRunner_Level_1.road_sections,
+        spawn_seeds=True,
+        spawn_trucks=False,
+        offramp=OfframpConfig(
+            enabled=True,
+            scroll_start=100,
+            scroll_end=300,
+            bridges=(),
+        ),
+    )
+    env = JaxRoadRunner(consts=base._replace(levels=(level,)))
     consts = env.consts
     road_top = consts.ROAD_TOP_Y
-    offramp_bottom = road_top - consts.OFFRAMP_GAP      # 102
-    offramp_top = offramp_bottom - consts.OFFRAMP_HEIGHT # 86
+    offramp_bottom = road_top - consts.OFFRAMP_GAP
+    offramp_top = offramp_bottom - consts.OFFRAMP_HEIGHT
 
-    # scroll_counter past scroll_end=300 → merge_x = W - (counter - 300)*SPEED < W (on-screen)
-    scroll_counter = 320   # merge_x = W - 60 = 100 (on-screen)
+    # Use a counter near the end of the active window (old restriction would block seeds here)
+    scroll_counter = 280
 
     key = jax.random.PRNGKey(0)
     _, state = env.reset(key)
     state = state._replace(
         scrolling_step_counter=jnp.array(scroll_counter, dtype=jnp.int32),
         is_scrolling=jnp.array(True),
-        # Set next_seed_spawn_scroll_step to 0 so spawning is always attempted
         next_seed_spawn_scroll_step=jnp.array(0, dtype=jnp.int32),
-        # Clear existing seeds
         seeds=state.seeds.at[:].set(-1),
     )
 
-    _, _, merge_x_val, _, _ = env._get_offramp_info(state)
-    W = consts.WIDTH
-    assert int(merge_x_val) < W, f"merge_x should be on-screen (<{W}) but got {int(merge_x_val)}"
+    offramp_active, _, _, _, _ = env._get_offramp_info(state)
+    assert bool(offramp_active), (
+        f"Offramp should be active at scroll_counter={scroll_counter}"
+    )
 
-    # Run 50 seed spawn steps and collect all spawned seed Y values
-    spawned_ys = []
-    for _ in range(50):
-        key, subkey = jax.random.split(key)
+    # Run enough spawn attempts to almost certainly get at least one offramp seed
+    offramp_seed_found = False
+    for _ in range(200):
         road_top_v, road_bottom_v, _ = env._get_road_bounds(state)
         state = env._update_and_spawn_seeds(state, road_top_v, road_bottom_v)
         for i in range(state.seeds.shape[0]):
             sx, sy = int(state.seeds[i, 0]), int(state.seeds[i, 1])
-            if sx >= 0 and sy >= 0:
-                spawned_ys.append(sy)
-        # Advance counter slightly
+            if sx >= 0 and offramp_top <= sy < offramp_bottom:
+                offramp_seed_found = True
+                break
+        if offramp_seed_found:
+            break
         state = state._replace(
             scrolling_step_counter=state.scrolling_step_counter + 1,
             next_seed_spawn_scroll_step=jnp.array(0, dtype=jnp.int32),
             seeds=state.seeds.at[:].set(-1),
         )
 
-    # None of the spawned seeds should be in the offramp Y band
-    for y in spawned_ys:
-        assert not (offramp_top <= y < offramp_bottom), (
-            f"Seed spawned at y={y} is in offramp band [{offramp_top}, {offramp_bottom}) "
-            f"even though merge_x={int(merge_x_val)} < W={W} (on screen) — phantom seed bug!"
-        )
+    assert offramp_seed_found, (
+        f"Expected at least one seed in offramp band [{offramp_top}, {offramp_bottom}) "
+        f"during active window (counter near {scroll_counter}), but none were spawned."
+    )
+
