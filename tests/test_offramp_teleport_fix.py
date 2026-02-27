@@ -434,14 +434,16 @@ def test_merge_zone_does_not_allow_main_to_offramp():
     main_min_y = road_top - (consts.PLAYER_SIZE[1] - 5) # 83
     SPEED = consts.PLAYER_MOVE_SPEED
     RAMP_W = consts.OFFRAMP_RAMP_WIDTH
+    W = consts.WIDTH
 
-    # scroll_counter where merge is in the middle of the screen
-    # merge_x = (counter - scroll_end) * SPEED = 70  → counter = 300 + 70//3 ≈ 323
-    scroll_counter = 323
-    merge_x = (scroll_counter - 300) * SPEED  # ≈ 69
+    # scroll_counter where merge is in the middle of the screen.
+    # New formula: merge_x = W - (counter - scroll_end) * SPEED
+    # We want merge_x ≈ 80 (mid-screen): counter = scroll_end + (W - 80) // SPEED = 300 + 26 = 326
+    scroll_counter = 326
+    merge_x = W - (scroll_counter - 300) * SPEED  # 160 - 78 = 82
 
-    # Place the player squarely in the merge zone, on the MAIN road (not offramp)
-    player_x = merge_x + RAMP_W // 2 - consts.PLAYER_SIZE[0] // 2
+    # Place the player squarely in the merge zone [merge_x - RAMP_W, merge_x]
+    player_x = merge_x - RAMP_W // 2 - consts.PLAYER_SIZE[0] // 2
     player_x = max(consts.SIDE_MARGIN, min(player_x, consts.WIDTH - consts.PLAYER_SIZE[0] - consts.SIDE_MARGIN))
 
     state = active_offramp_state(env, scroll_counter=scroll_counter)
@@ -453,11 +455,11 @@ def test_merge_zone_does_not_allow_main_to_offramp():
 
     road_top_v, road_bottom_v, _ = env._get_road_bounds(state)
 
-    # Sanity: player overlaps the merge zone
-    at_merge_raw = (player_x + consts.PLAYER_SIZE[0] > merge_x) & (player_x < merge_x + RAMP_W)
+    # Sanity: player overlaps the merge zone [merge_x - RAMP_W, merge_x]
+    at_merge_raw = (player_x + consts.PLAYER_SIZE[0] > merge_x - RAMP_W) & (player_x < merge_x)
     assert at_merge_raw, (
-        f"Player (x={player_x}) should overlap merge zone [merge_x={merge_x}, "
-        f"merge_x+RAMP_W={merge_x + RAMP_W}]"
+        f"Player (x={player_x}) should overlap merge zone [merge_x-RAMP_W={merge_x - RAMP_W}, "
+        f"merge_x={merge_x}]"
     )
 
     # Propose y = main_min_y - SPEED (falls in gap) — MUST be rejected upward movement
@@ -501,16 +503,18 @@ def test_player_forced_to_main_road_when_merge_passes():
     main_min_y = road_top - (consts.PLAYER_SIZE[1] - 5) # 83
     SPEED = consts.PLAYER_MOVE_SPEED
     PLAYER_W = consts.PLAYER_SIZE[0]
+    W = consts.WIDTH
 
-    # Choose a scroll counter where merge_x > player_x + PLAYER_W
-    # player_x ≈ 70 (PLAYER_START_X).  merge_x = (counter - 300)*SPEED.
-    # merge_x > 70 + 8 = 78 → counter > 300 + 78/3 = 326.
-    scroll_counter = 340   # merge_x = 40*3 = 120 >> 78
-    merge_x = (scroll_counter - 300) * SPEED   # 120
+    # Choose a scroll counter where merge_x < player_x (merge has passed the player).
+    # player_x ≈ 70 (PLAYER_START_X).
+    # New formula: merge_x = W - (counter - scroll_end) * SPEED = W - (counter - 300)*SPEED
+    # merge_x < 70 → (counter - 300)*SPEED > W - 70 = 90 → counter > 300 + 30 = 330.
+    scroll_counter = 340   # merge_x = 160 - 40*3 = 40 < 70
+    merge_x = W - (scroll_counter - 300) * SPEED   # 40
 
     player_x = 70   # standard player position
-    assert merge_x > player_x + PLAYER_W, (
-        f"merge_x={merge_x} should be past player right edge {player_x + PLAYER_W}"
+    assert merge_x < player_x, (
+        f"merge_x={merge_x} should be to the left of player_x {player_x}"
     )
 
     state = active_offramp_state(env, scroll_counter=scroll_counter)
@@ -532,7 +536,7 @@ def test_player_forced_to_main_road_when_merge_passes():
             road_bottom_v,
         )
         assert int(checked_y) >= main_min_y, (
-            f"Merge has passed player (merge_x={merge_x} > player_right={player_x+PLAYER_W}); "
+            f"Merge has passed player (merge_x={merge_x} < player_x={player_x}); "
             f"player should be on main road (y >= {main_min_y}), "
             f"but bounds returned y={int(checked_y)} for proposed_y={proposed_y}"
         )

@@ -981,8 +981,8 @@ class JaxRoadRunner(
 
         # The player can only cross between roads when they are physically at one of the
         # diagonal connecting sections (split or merge) OR at a bridge.
-        at_split = (x_pos + PLAYER_W > split_x - RAMP_W) & (x_pos < split_x)
-        at_merge = (x_pos + PLAYER_W > merge_x) & (x_pos < merge_x + RAMP_W)
+        at_split = (x_pos + PLAYER_W > split_x) & (x_pos < split_x + RAMP_W)
+        at_merge = (x_pos + PLAYER_W > merge_x - RAMP_W) & (x_pos < merge_x)
         at_bridge = self._player_at_bridge(state, x_pos)
         # The merge is the END of the offramp — it only allows descent (offramp → main road).
         # A player already on the main road must not be able to re-enter the offramp via the
@@ -1126,8 +1126,8 @@ class JaxRoadRunner(
         road_top_after, _, _ = self._get_road_bounds(state)
         RAMP_W = self.consts.OFFRAMP_RAMP_WIDTH
         PLAYER_W = self.consts.PLAYER_SIZE[0]
-        at_split = (player_x + PLAYER_W > split_x - RAMP_W) & (player_x < split_x)
-        at_merge = (player_x + PLAYER_W > merge_x) & (player_x < merge_x + RAMP_W)
+        at_split = (player_x + PLAYER_W > split_x) & (player_x < split_x + RAMP_W)
+        at_merge = (player_x + PLAYER_W > merge_x - RAMP_W) & (player_x < merge_x)
         at_bridge = self._player_at_bridge(state, player_x)
         # Merge is unidirectional: only offramp → main road.  A main-road player must not
         # be able to snap back to the offramp via the merge (phantom-extension bug).
@@ -3113,11 +3113,11 @@ class RoadRunnerRenderer(JAXGameRenderer):
             offramp_road_masked = jnp.where(col_mask, offramp_road, self.jr.TRANSPARENT_ID)
             c = self.jr.render_at(c, 0, offramp_top, offramp_road_masked)
 
-            # --- Split sprite: rendered just left of split_x ---
-            # The sprite spans [split_x - RAMP_W, split_x] in screen x.
-            s_x = split_x - RAMP_W
-            s_x_clamped = jnp.clip(s_x, 0, W).astype(jnp.int32)
-            split_on_screen = (split_x > MARGIN) & (s_x < W - MARGIN)
+            # --- Split sprite: rendered at split_x (right edge of the transition zone) ---
+            # The sprite spans [split_x, split_x + RAMP_W] in screen x.
+            s_x = split_x
+            s_x_clamped = jnp.clip(s_x, 0, W - RAMP_W).astype(jnp.int32)
+            split_on_screen = (split_x < W - MARGIN) & (split_x + RAMP_W > MARGIN)
             c = jax.lax.cond(
                 split_on_screen,
                 lambda cv: self.jr.render_at(
@@ -3127,10 +3127,10 @@ class RoadRunnerRenderer(JAXGameRenderer):
                 c,
             )
 
-            # --- Merge sprite: rendered just right of merge_x ---
-            # The sprite spans [merge_x, merge_x + RAMP_W] in screen x.
-            m_x_clamped = jnp.clip(merge_x, 0, W).astype(jnp.int32)
-            merge_on_screen = (merge_x > MARGIN - RAMP_W) & (merge_x < W - MARGIN)
+            # --- Merge sprite: rendered at merge_x - RAMP_W (left edge of the transition zone) ---
+            # The sprite spans [merge_x - RAMP_W, merge_x] in screen x.
+            m_x_clamped = jnp.clip(merge_x - RAMP_W, 0, W - RAMP_W).astype(jnp.int32)
+            merge_on_screen = (merge_x - RAMP_W < W - MARGIN) & (merge_x > MARGIN)
             c = jax.lax.cond(
                 merge_on_screen,
                 lambda cv: self.jr.render_at(
