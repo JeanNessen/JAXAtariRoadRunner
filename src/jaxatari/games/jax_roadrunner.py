@@ -901,15 +901,19 @@ class JaxRoadRunner(
 
         counter = state.scrolling_step_counter
 
-        # Screen x of split leading edge: 0 at scroll_start, grows right each step
-        split_x = (counter - scroll_start) * SPEED
-        # Screen x of merge leading edge: 0 at scroll_end, grows right each step
-        merge_x = (counter - scroll_end) * SPEED
+        # Screen x of split sprite's right edge: W at scroll_start, scrolls LEFT each step.
+        # The split sprite occupies [split_x - RAMP_W, split_x]; the offramp road band
+        # extends to the RIGHT of it.
+        split_x = W - (counter - scroll_start) * SPEED
+        # Screen x of merge sprite's left edge: W at scroll_end, scrolls LEFT each step.
+        # The merge sprite occupies [merge_x, merge_x + RAMP_W]; the offramp road band
+        # extends to the LEFT of it.
+        merge_x = W - (counter - scroll_end) * SPEED
 
-        # The offramp is active from when the split appears until the merge exits the right
-        # edge of the screen.  Extending through the full merge animation ensures the player
-        # can exit during the merge and that the merge sprite is rendered correctly.
-        offramp_active = enabled & (counter >= scroll_start) & (merge_x < W + RAMP_W)
+        # The offramp is active from when the split enters the screen until the merge
+        # exits the left edge.  Extending RAMP_W past the left edge ensures the merge
+        # sprite is fully rendered before deactivation.
+        offramp_active = enabled & (counter >= scroll_start) & (merge_x > -RAMP_W)
 
         road_top, _, _ = self._get_road_bounds(state)
         offramp_bottom = (road_top - self.consts.OFFRAMP_GAP).astype(jnp.int32)
@@ -929,11 +933,10 @@ class JaxRoadRunner(
         row = self._offramp_data[level_idx]  # shape (3 + MAX_OFFRAMP_BRIDGES,)
         bridge_scroll_steps = row[3:]  # shape (MAX_OFFRAMP_BRIDGES,)
 
-        # Screen-X: bridge_scroll_step gives the step at which the bridge's left edge
-        # reaches x=0 (same convention as split_x / merge_x).
-        # A bridge scrolls leftward: screen_x = (counter - bridge_step) * SPEED
+        # Screen-X of bridge left edge: W at bridge_step, scrolls LEFT each step.
+        # Same convention as split_x / merge_x.
         # bridge_step == -1 means unused; return a sentinel off-screen.
-        bridge_xs = (counter - bridge_scroll_steps) * SPEED
+        bridge_xs = self.consts.WIDTH - (counter - bridge_scroll_steps) * SPEED
         # Replace unused slots (bridge_scroll_steps == -1) with off-screen sentinel
         bridge_xs = jnp.where(bridge_scroll_steps >= 0, bridge_xs, jnp.full_like(bridge_xs, -9999))
         return bridge_xs
@@ -1006,12 +1009,14 @@ class JaxRoadRunner(
         # The main road uses its full vertical range including the top lane — hitbox
         # separation in _check_game_over handles enemy-through-median concerns.
         #
-        # Once the merge sprite has scrolled past the player's position the offramp road
-        # strip no longer covers them, so we treat it as ended regardless of player_on_offramp.
-        # Bridges are an exception: if a bridge is active at the player's x the player can
-        # still cross, so the merge-has-passed rule is suppressed in that case.
+        # Once the merge sprite has scrolled LEFT past the player's position the offramp
+        # road strip no longer covers them, so we treat it as ended.
+        # In the new (scrolling-left) coordinate system, merge_x DECREASES.  The road's
+        # right boundary is at merge_x; when merge_x < x_pos the player has exited the
+        # road band on the right.
+        # Bridges are an exception: the merge-has-passed rule is suppressed at a bridge.
         # De Morgan: ~(merge_has_passed & ~at_bridge) = ~merge_has_passed | at_bridge
-        merge_has_passed = merge_x > x_pos + PLAYER_W
+        merge_has_passed = x_pos >= merge_x
         on_offramp_road = state.player_on_offramp & offramp_active & (~merge_has_passed | at_bridge)
         checked_y = jnp.where(
             in_transition,
@@ -1137,10 +1142,10 @@ class JaxRoadRunner(
         # the bridge/merge diagonal scrolled away and in_transition turned False.
         off_max_y_int = offramp_bottom - self.consts.PLAYER_SIZE[1]
         on_offramp_by_y = player_y.astype(jnp.int32) <= off_max_y_int
-        # After the merge has scrolled past the player's position there is no more offramp
-        # road beneath them.  Clear player_on_offramp so the main-road bounds take over.
+        # After the merge has scrolled LEFT past the player's position the offramp road
+        # no longer extends to the player's x.  Clear player_on_offramp.
         # Bridges override this: if the player is at a bridge they are still crossing.
-        merge_has_passed = merge_x > player_x + PLAYER_W
+        merge_has_passed = player_x >= merge_x
         new_on_offramp = jnp.where(
             in_transition,
             on_offramp_by_y,
@@ -1411,11 +1416,11 @@ class JaxRoadRunner(
         )
 
         # Determine whether to spawn on offramp or main road.
-        # Only spawn on the offramp while the merge hasn't entered the screen yet
-        # (merge_x <= 0).  Once the merge appears, the offramp road band shrinks from the
-        # left and new seeds spawned at x=0 would land outside it on the median/background.
+        # Only spawn on the offramp while the merge hasn't yet entered the screen
+        # (merge_x_spawn >= WIDTH).  Once the merge appears the road band shrinks from
+        # the right and seeds spawned at x=0 may land outside it on the median.
         offramp_active, _, merge_x_spawn, offramp_top_y, offramp_bottom_y = self._get_offramp_info(state)
-        use_offramp = offramp_active & (merge_x_spawn <= 0) & (jax.random.uniform(rng_road) > 0.5)
+        use_offramp = offramp_active & (merge_x_spawn >= self.consts.WIDTH) & (jax.random.uniform(rng_road) > 0.5)
         spawn_min_y = jnp.where(use_offramp, offramp_top_y.astype(jnp.int32), road_top)
         spawn_max_y = jnp.where(
             use_offramp,
@@ -1425,7 +1430,6 @@ class JaxRoadRunner(
 
         def _spawn(st: RoadRunnerState) -> RoadRunnerState:
             slot_idx = jnp.argmax(available_slots)
-            # Generate random Y position within selected road bounds
             seed_y = jax.random.randint(
                 rng_spawn_y,
                 (),
@@ -1761,11 +1765,10 @@ class JaxRoadRunner(
         )
 
         # Determine whether to spawn on offramp or main road.
-        # Only spawn on the offramp while the merge hasn't entered the screen yet
-        # (merge_x <= 0).  Once the merge appears, the offramp road band shrinks from the
-        # left and new landmines spawned at x=0 would land outside it on the median/background.
+        # Only spawn on the offramp while the merge hasn't yet entered the screen
+        # (merge_x_spawn >= WIDTH).
         offramp_active, _, merge_x_spawn, offramp_top_y, offramp_bottom_y = self._get_offramp_info(state)
-        use_offramp = offramp_active & (merge_x_spawn <= 0) & (jax.random.uniform(rng_road) > 0.5)
+        use_offramp = offramp_active & (merge_x_spawn >= self.consts.WIDTH) & (jax.random.uniform(rng_road) > 0.5)
         spawn_min_y = jnp.where(use_offramp, offramp_top_y.astype(jnp.int32), road_top)
         spawn_max_y = jnp.where(
             use_offramp,
@@ -3075,23 +3078,25 @@ class RoadRunnerRenderer(JAXGameRenderer):
         # Scale x coordinates for column masking
         x_scale = ofr_sprite_w / SCROLL_W  # float, used for left_x / right_x scaling
 
-        # Screen x of merge leading edge (used to determine when to stop rendering)
-        merge_x_check = (counter - scroll_end) * SPEED
-        # Active from split appearance until the merge sprite exits the right screen edge
-        offramp_active = enabled & (counter >= scroll_start) & (merge_x_check < W + RAMP_W)
+        # Screen x of merge sprite's left edge: W at scroll_end, scrolls LEFT each step.
+        merge_x_check = W - (counter - scroll_end) * SPEED
+        # Active from split appearance until the merge sprite exits the left screen edge.
+        offramp_active = enabled & (counter >= scroll_start) & (merge_x_check > -RAMP_W)
 
         # Static Y position of the offramp road
         offramp_top = self.consts.ROAD_TOP_Y - self.consts.OFFRAMP_GAP - OFFRAMP_H
 
         def _render_active(c: jnp.ndarray) -> jnp.ndarray:
-            # Screen x of split leading edge (0 at scroll_start, grows rightward)
-            split_x = (counter - scroll_start) * SPEED
-            # Screen x of merge leading edge (0 at scroll_end, grows rightward)
-            merge_x = (counter - scroll_end) * SPEED
+            # Screen x of split sprite right edge: W at scroll_start, scrolls LEFT each step.
+            # The offramp road band extends to the RIGHT of the split sprite.
+            split_x = W - (counter - scroll_start) * SPEED
+            # Screen x of merge sprite left edge: W at scroll_end, scrolls LEFT each step.
+            # The offramp road band extends to the LEFT of the merge sprite.
+            merge_x = W - (counter - scroll_end) * SPEED
 
-            # Offramp road band: visible between the merge and the split leading edges
-            left_x = jnp.maximum(MARGIN, merge_x)
-            right_x = jnp.minimum(W - MARGIN, split_x)
+            # Offramp road band: visible between split_x (left boundary) and merge_x (right).
+            left_x = jnp.maximum(MARGIN, split_x)
+            right_x = jnp.minimum(W - MARGIN, merge_x)
 
             # Slice the scrolling offramp road pattern using scaled dimensions
             offramp_road = jax.lax.dynamic_slice(
@@ -3144,7 +3149,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
 
             def render_one_bridge(i, cv):
                 bstep = bridge_xs[i]
-                bx = (counter - bstep) * SPEED
+                bx = W - (counter - bstep) * SPEED  # scrolls LEFT, same as split/merge
                 bx_clamped = jnp.clip(bx, 0, W - BRIDGE_W).astype(jnp.int32)
                 on_screen = (bstep >= 0) & (bx >= 0) & (bx < W)
                 return jax.lax.cond(

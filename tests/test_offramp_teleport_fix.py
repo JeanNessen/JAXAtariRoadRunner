@@ -120,9 +120,10 @@ def test_no_teleport_when_descending_via_bridge():
     BRIDGE_W = consts.OFFRAMP_BRIDGE_WIDTH
     PLAYER_W = consts.PLAYER_SIZE[0]
 
-    # scroll_counter=200 → bridge screen_x = (200-150)*SPEED; put player on bridge
+    # scroll_counter=200 → bridge screen_x = W - (200-150)*SPEED; put player on bridge
     scroll_counter = 200
-    bridge_screen_x = (scroll_counter - 150) * SPEED   # bridge left edge on screen
+    W = consts.WIDTH
+    bridge_screen_x = W - (scroll_counter - 150) * SPEED   # bridge left edge on screen
 
     state = active_offramp_state(env, scroll_counter=scroll_counter)
 
@@ -140,15 +141,15 @@ def test_no_teleport_when_descending_via_bridge():
     at_bridge = env._player_at_bridge(state, jnp.array(player_x))
     assert bool(at_bridge), "Player should overlap the bridge"
 
-    # Now advance the scroll so the bridge moves completely past the player
-    # bridge_screen_x scrolls left by SPEED each step; bridge gone when bx < player_x
-    # i.e. counter such that (counter - 150)*SPEED < player_x
-    steps_until_gone = int(player_x // SPEED) + 5
+    # Now advance the scroll so the bridge moves completely past the player.
+    # Bridge scrolls LEFT (bx = W - (counter-step)*SPEED, decreasing).
+    # Bridge gone when bx + BRIDGE_W < player_x.
+    steps_until_gone = int((bridge_screen_x + BRIDGE_W - player_x) // SPEED) + 5
     state_after = state._replace(
         scrolling_step_counter=jnp.array(scroll_counter + steps_until_gone, dtype=jnp.int32)
     )
     # Confirm bridge is no longer overlapping
-    new_bridge_x = (int(state_after.scrolling_step_counter) - 150) * SPEED
+    new_bridge_x = W - (int(state_after.scrolling_step_counter) - 150) * SPEED
     at_bridge_after = env._player_at_bridge(state_after, jnp.array(player_x))
     assert not bool(at_bridge_after), "Bridge should have scrolled away"
 
@@ -185,7 +186,8 @@ def test_ascending_player_flagged_on_offramp_only_when_in_band():
     off_max_y = offramp_bottom - consts.PLAYER_SIZE[1]  # 70
 
     scroll_counter = 200
-    bridge_screen_x = (scroll_counter - 150) * consts.PLAYER_MOVE_SPEED
+    W = consts.WIDTH
+    bridge_screen_x = W - (scroll_counter - 150) * consts.PLAYER_MOVE_SPEED
     BRIDGE_W = consts.OFFRAMP_BRIDGE_WIDTH
     PLAYER_W = consts.PLAYER_SIZE[0]
     player_x = bridge_screen_x + (BRIDGE_W - PLAYER_W) // 2
@@ -324,7 +326,8 @@ def test_crossing_at_split_snaps_gap_to_offramp():
     SPEED = consts.PLAYER_MOVE_SPEED
 
     scroll_counter = 200
-    bridge_screen_x = (scroll_counter - 150) * SPEED
+    W = consts.WIDTH
+    bridge_screen_x = W - (scroll_counter - 150) * SPEED
     BRIDGE_W = consts.OFFRAMP_BRIDGE_WIDTH
     PLAYER_W = consts.PLAYER_SIZE[0]
     player_x = bridge_screen_x + (BRIDGE_W - PLAYER_W) // 2
@@ -552,8 +555,8 @@ def test_no_offramp_seeds_spawned_after_merge_enters_screen():
     offramp_bottom = road_top - consts.OFFRAMP_GAP      # 102
     offramp_top = offramp_bottom - consts.OFFRAMP_HEIGHT # 86
 
-    # scroll_counter past scroll_end=300 → merge_x = (counter - 300)*3 > 0
-    scroll_counter = 320   # merge_x = 60 (on-screen)
+    # scroll_counter past scroll_end=300 → merge_x = W - (counter - 300)*SPEED < W (on-screen)
+    scroll_counter = 320   # merge_x = W - 60 = 100 (on-screen)
 
     key = jax.random.PRNGKey(0)
     _, state = env.reset(key)
@@ -566,8 +569,9 @@ def test_no_offramp_seeds_spawned_after_merge_enters_screen():
         seeds=state.seeds.at[:].set(-1),
     )
 
-    _, merge_x_val, _, _, _ = env._get_offramp_info(state)
-    assert int(merge_x_val) > 0, f"merge_x should be >0 but got {int(merge_x_val)}"
+    _, _, merge_x_val, _, _ = env._get_offramp_info(state)
+    W = consts.WIDTH
+    assert int(merge_x_val) < W, f"merge_x should be on-screen (<{W}) but got {int(merge_x_val)}"
 
     # Run 50 seed spawn steps and collect all spawned seed Y values
     spawned_ys = []
@@ -590,5 +594,5 @@ def test_no_offramp_seeds_spawned_after_merge_enters_screen():
     for y in spawned_ys:
         assert not (offramp_top <= y < offramp_bottom), (
             f"Seed spawned at y={y} is in offramp band [{offramp_top}, {offramp_bottom}) "
-            f"even though merge_x={int(merge_x_val)} > 0 — phantom seed bug!"
+            f"even though merge_x={int(merge_x_val)} < W={W} (on screen) — phantom seed bug!"
         )
