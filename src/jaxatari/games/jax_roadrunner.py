@@ -2690,10 +2690,9 @@ class RoadRunnerRenderer(JAXGameRenderer):
         road_no_stripes_sprite = self._create_road_sprite(stripes=False)
         life_sprite = self._create_life_sprite()
         offramp_road_sprite = self._create_offramp_road_sprite()
-        offramp_split_sprite = self._create_offramp_split_sprite()
         offramp_bridge_sprite = self._create_offramp_bridge_sprite()
         asset_config = self._get_asset_config(
-            road_sprite, road_no_stripes_sprite, life_sprite, offramp_road_sprite, offramp_split_sprite,
+            road_sprite, road_no_stripes_sprite, life_sprite, offramp_road_sprite,
             offramp_bridge_sprite,
         )
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/roadrunner"
@@ -2826,46 +2825,6 @@ class RoadRunnerRenderer(JAXGameRenderer):
         road_color_rgba = jnp.array([0, 0, 0, 255], dtype=jnp.uint8)
         return jnp.broadcast_to(road_color_rgba, (H, SCROLL_WIDTH, 4)).copy()
 
-    def _create_offramp_split_sprite(self) -> jnp.ndarray:
-        """Create the diagonal transition sprite for the split/merge connecting sections.
-
-        The sprite covers the vertical span from offramp_top to the main road top
-        (OFFRAMP_HEIGHT + OFFRAMP_GAP rows) and is OFFRAMP_RAMP_WIDTH columns wide.
-
-        Column 0  (left  = fully separated): only the offramp rows are road.
-        Column W-1 (right = still merged):   the entire sprite height is road.
-
-        The formula fills from the diagonal line DOWN to the bottom of the sprite,
-        ensuring the full bottom row is always road (flush connection to the main road
-        at every column).  The diagonal runs through the gap area from top-right to
-        bottom-left, making the connecting section look like a proper ramp rather
-        than a triangle with a single point of contact.
-        """
-        RAMP_W = self.consts.OFFRAMP_RAMP_WIDTH
-        OFFRAMP_H = self.consts.OFFRAMP_HEIGHT
-        GAP_H = self.consts.OFFRAMP_GAP
-        total_h = OFFRAMP_H + GAP_H
-
-        road_color_rgba = jnp.array([0, 0, 0, 255], dtype=jnp.uint8)
-        # Use alpha=0 for non-road pixels: the rendering pipeline treats pixels with
-        # alpha <= 128 as TRANSPARENT_ID, so they show the background through naturally.
-        bg_color_rgba = jnp.array([0, 0, 0, 0], dtype=jnp.uint8)
-
-        y, x = jnp.indices((total_h, RAMP_W))
-        # The diagonal line in the gap area runs from (x=RAMP_W-1, y=OFFRAMP_H) on the
-        # right (merged) to (x=0, y=total_h-1) on the left (separated bottom).
-        # Road fills:
-        #   • always the offramp band (y < OFFRAMP_H)
-        #   • the gap region BELOW the diagonal (y >= diagonal_y(x))
-        # This guarantees the bottom row (y=total_h-1) is road at every column,
-        # creating a full-width flush connection to the main road.
-        # Using RAMP_W (not RAMP_W-1) as denominator ensures diagonal_y(x=0) = total_h-1,
-        # so the leftmost column's bottom row is road; RAMP_W-1 would give total_h, missing it.
-        safe_denom = jnp.maximum(RAMP_W, 1)
-        diagonal_y = OFFRAMP_H + GAP_H * (RAMP_W - 1 - x) // safe_denom
-        is_road = (y < OFFRAMP_H) | (y >= diagonal_y)
-        return jnp.where(is_road[:, :, jnp.newaxis], road_color_rgba, bg_color_rgba)
-
     def _create_offramp_bridge_sprite(self) -> jnp.ndarray:
         """Create the bridge sprite: a solid black vertical strip filling the gap (median).
 
@@ -2908,7 +2867,6 @@ class RoadRunnerRenderer(JAXGameRenderer):
         road_no_stripes_sprite: jnp.ndarray,
         life_sprite: jnp.ndarray,
         offramp_road_sprite: jnp.ndarray,
-        offramp_split_sprite: jnp.ndarray,
         offramp_bridge_sprite: jnp.ndarray,
     ) -> list:
         asset_config = [
@@ -2942,9 +2900,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "bullet", "type": "single", "file": "bullet.npy"},
             # Offramp sprites
             {"name": "offramp_road", "type": "procedural", "data": offramp_road_sprite},
-            {"name": "offramp_split", "type": "procedural", "data": offramp_split_sprite},
-            {"name": "offramp_merge", "type": "procedural",
-             "data": jnp.fliplr(offramp_split_sprite)},
+            {"name": "offramp_split", "type": "single", "file": "offramp_split.npy"},
+            {"name": "offramp_merge", "type": "single", "file": "offramp_merge.npy"},
             {"name": "offramp_bridge", "type": "procedural", "data": offramp_bridge_sprite},
         ]
 
