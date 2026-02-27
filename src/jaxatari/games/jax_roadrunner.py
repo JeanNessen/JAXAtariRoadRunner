@@ -2677,9 +2677,11 @@ class RoadRunnerRenderer(JAXGameRenderer):
         life_sprite = self._create_life_sprite()
         offramp_road_sprite = self._create_offramp_road_sprite()
         offramp_bridge_sprite = self._create_offramp_bridge_sprite()
+        offramp_split_sprite = self._create_offramp_split_sprite()
+        offramp_merge_sprite = jnp.flip(offramp_split_sprite, axis=1)
         asset_config = self._get_asset_config(
             road_sprite, road_no_stripes_sprite, life_sprite, offramp_road_sprite,
-            offramp_bridge_sprite,
+            offramp_bridge_sprite, offramp_split_sprite, offramp_merge_sprite,
         )
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/roadrunner"
 
@@ -2822,6 +2824,25 @@ class RoadRunnerRenderer(JAXGameRenderer):
         road_color_rgba = jnp.array([0, 0, 0, 255], dtype=jnp.uint8)
         return jnp.broadcast_to(road_color_rgba, (GAP_H, BRIDGE_W, 4)).copy()
 
+    def _create_offramp_split_sprite(self) -> jnp.ndarray:
+        """Create the offramp split transition sprite (RAMP_W × (OFFRAMP_HEIGHT+OFFRAMP_GAP)).
+
+        The sprite contains a filled diagonal triangle connecting the bottom row (main road
+        level) at the left edge to the full road height at the right edge.  Black = road,
+        transparent = background.  The merge sprite is the horizontal flip of this sprite.
+        """
+        import numpy as np
+        RAMP_W = self.consts.OFFRAMP_RAMP_WIDTH
+        total_h = self.consts.OFFRAMP_HEIGHT + self.consts.OFFRAMP_GAP
+        sprite = np.zeros((total_h, RAMP_W, 4), dtype=np.uint8)
+        for x in range(RAMP_W):
+            # diagonal_y decreases from (total_h-1) at x=0 to 0 at x=RAMP_W-1,
+            # producing a staircase fully connecting the main road (bottom) on the
+            # left to the complete offramp band on the right.
+            diagonal_y = (RAMP_W - 1 - x) * total_h // RAMP_W
+            sprite[diagonal_y:, x] = [0, 0, 0, 255]
+        return jnp.array(sprite)
+
     def _create_seed_sprite(self) -> jnp.ndarray:
         seed_color_rgba = (0, 0, 255, 255)
         seed_shape = (self.consts.SEED_SIZE[0], self.consts.SEED_SIZE[1], 4)
@@ -2854,6 +2875,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
         life_sprite: jnp.ndarray,
         offramp_road_sprite: jnp.ndarray,
         offramp_bridge_sprite: jnp.ndarray,
+        offramp_split_sprite: jnp.ndarray,
+        offramp_merge_sprite: jnp.ndarray,
     ) -> list:
         asset_config = [
             {"name": "background", "type": "background", "file": "background.npy"},
@@ -2886,8 +2909,8 @@ class RoadRunnerRenderer(JAXGameRenderer):
             {"name": "bullet", "type": "single", "file": "bullet.npy"},
             # Offramp sprites
             {"name": "offramp_road", "type": "procedural", "data": offramp_road_sprite},
-            {"name": "offramp_split", "type": "single", "file": "offramp_split.npy"},
-            {"name": "offramp_merge", "type": "single", "file": "offramp_merge.npy"},
+            {"name": "offramp_split", "type": "procedural", "data": offramp_split_sprite},
+            {"name": "offramp_merge", "type": "procedural", "data": offramp_merge_sprite},
             {"name": "offramp_bridge", "type": "procedural", "data": offramp_bridge_sprite},
         ]
 
