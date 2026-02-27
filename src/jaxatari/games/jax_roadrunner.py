@@ -3087,16 +3087,15 @@ class RoadRunnerRenderer(JAXGameRenderer):
         offramp_top = self.consts.ROAD_TOP_Y - self.consts.OFFRAMP_GAP - OFFRAMP_H
 
         def _render_active(c: jnp.ndarray) -> jnp.ndarray:
-            # Screen x of split sprite right edge: W at scroll_start, scrolls LEFT each step.
-            # The offramp road band extends to the RIGHT of the split sprite.
+            # Screen x of split sprite left edge: W at scroll_start, scrolls LEFT each step.
             split_x = W - (counter - scroll_start) * SPEED
             # Screen x of merge sprite left edge: W at scroll_end, scrolls LEFT each step.
-            # The offramp road band extends to the LEFT of the merge sprite.
             merge_x = W - (counter - scroll_end) * SPEED
 
-            # Offramp road band: visible between split_x (left boundary) and merge_x (right).
-            left_x = jnp.maximum(MARGIN, split_x)
-            right_x = jnp.minimum(W - MARGIN, merge_x)
+            # Offramp road band: always full-width while active.  The split/merge
+            # sprites scroll in/out as transition markers; they do NOT bound the road.
+            left_x = MARGIN
+            right_x = W - MARGIN
 
             # Slice the scrolling offramp road pattern using scaled dimensions
             offramp_road = jax.lax.dynamic_slice(
