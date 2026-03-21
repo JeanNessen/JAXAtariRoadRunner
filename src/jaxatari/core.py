@@ -69,6 +69,7 @@ GAME_MODULES = {
     "videocube": "jaxatari.games.jax_videocube",
     "videopinball": "jaxatari.games.jax_videopinball",
     "wordzapper": "jaxatari.games.jax_wordzapper",
+    "roadrunner": "jaxatari.games.jax_roadrunner",
     # Add new games here
 }
 
@@ -81,6 +82,7 @@ MOD_MODULES = {
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
     "videopinball": "jaxatari.games.mods.videopinball_mods.VideoPinballEnvMod",
     'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
+    'roadrunner': "jaxatari.games.mods.roadrunner_mods.RoadRunnerEnvMod",
 }
 
 
